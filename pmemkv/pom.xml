@@ -36,5 +36,11 @@ LICENSE file.
       <version>${project.version}</version>
       <scope>provided</scope>
     </dependency>
+
+    <dependency>
+      <groupId>io.pmem</groupId>
+      <artifactId>pmemkv</artifactId>
+      <version>1.0.0</version>
+    </dependency>
   </dependencies>
 </project>
