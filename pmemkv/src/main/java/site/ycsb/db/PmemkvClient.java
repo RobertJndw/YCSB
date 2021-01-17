@@ -12,7 +12,6 @@ import io.pmem.pmemkv.Database;
 import io.pmem.pmemkv.Converter;
 
 import java.nio.ByteBuffer;
-import java.util.stream.Collectors;
 
 /**
  * The YCSB binding for <a href="https://github.com/pmem/pmemkv">pmemkv</a>.
@@ -119,14 +118,12 @@ class MapStringConverter implements Converter<Map<String, ByteIterator>> {
 
   @Override
   public ByteBuffer toByteBuffer(Map<String, ByteIterator> stringByteIteratorMap) {
-    // Conversion necessary because ByteIterator is not serializable
-    Map<String, String> inputMap = stringByteIteratorMap.entrySet().stream()
-        .collect(Collectors.toMap(Map.Entry::getKey, e -> new String(e.getValue().toArray())));
     ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
     ObjectOutputStream out;
     try {
       out = new ObjectOutputStream(byteOut);
-      out.writeObject(inputMap);
+      // Conversion necessary because ByteIterator is not serializable
+      out.writeObject(StringByteIterator.getStringMap(stringByteIteratorMap));
       out.flush();
     } catch (IOException e) {
       e.printStackTrace();
@@ -162,10 +159,7 @@ class MapStringConverter implements Converter<Map<String, ByteIterator>> {
       }
     }
     // Revert conversion from serialization
-    Map<String, ByteIterator> outputMap = map.entrySet().stream()
-        .collect(Collectors.toMap(Map.Entry::getKey, e -> new StringByteIterator(e.getValue())));
-      
-    return outputMap;
+    return StringByteIterator.getByteIteratorMap(map);
   }
 }
 
