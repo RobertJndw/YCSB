@@ -142,7 +142,7 @@ class MapStringConverter implements Converter<Map<String, ByteIterator>> {
   public Map<String, ByteIterator> fromByteBuffer(ByteBuffer byteBuffer) {
     ByteArrayInputStream byteIn = new ByteArrayInputStream(byteBuffer.array());
     ObjectInputStream in = null;
-    Map<String, String> map = null;
+    Map<String, String> map = new HashMap<>();
     try {
       in = new ObjectInputStream(byteIn);
       map = (Map<String, String>) in.readObject();
