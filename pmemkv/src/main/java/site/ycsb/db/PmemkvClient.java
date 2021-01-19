@@ -24,20 +24,20 @@ public class PmemkvClient extends DB {
   public void init() throws DBException {
     Properties props = getProperties();
 
-    String path = props.getProperty("path", "/dev/shm");
-    String engine = props.getProperty("engine", "vsmap");
-    long size = Long.parseLong(props.getProperty("size", ""+Long.MAX_VALUE));
+    String path = props.getProperty("path", "/mnt/pmem/ycsbDatabase");
+    String engine = props.getProperty("engine", "cmap");
+    long size = Long.parseLong(props.getProperty("size", ""+Integer.MAX_VALUE));
+    boolean reset = Boolean.parseBoolean(props.getProperty("reset", "false"));
 
     try {
-      db = new Database.Builder<String, Map<String, ByteIterator>>(engine)
-          .setPath(path)
-          .setSize(size)
-          .setKeyConverter(new StringConverter())
-          .setValueConverter(new MapStringConverter())
-          .setForceCreate(true)
-          .build();
+      File f = new File(path);
+      if (f.exists() && !f.isDirectory() && reset) {
+        f.delete();
+      }
+      db = getDatabase(path, size, engine);
     } catch (Exception e) {
       System.err.println("Error: Creating the database failed");
+      e.printStackTrace();
       throw new DBException(e);
     }
   }
@@ -83,8 +83,12 @@ public class PmemkvClient extends DB {
 
   @Override
   public Status insert(String table, String key, Map<String, ByteIterator> values) {
-    key = createKey(table, key);
-    db.put(key, values);
+    try {
+      key = createKey(table, key);
+      db.put(key, values);
+    } catch (Exception e) {
+      e.printStackTrace();
+    }
     return Status.OK;
   }
   
@@ -98,8 +102,28 @@ public class PmemkvClient extends DB {
     }
   }
 
+  @Override
+  public void cleanup() throws DBException {
+    db.stop();
+  }
+
   private String createKey(String table, String key) {
     return table+"/"+key;
+  }
+
+  private static Database<String, Map<String, ByteIterator>> getDatabase(String path, long size, 
+          String engine) {
+
+    Database.Builder<String, Map<String, ByteIterator>> builder = new Database.Builder(engine)
+            .setKeyConverter(new StringConverter())
+            .setValueConverter(new MapStringConverter());
+
+    File f = new File(path);
+    if (f.exists() && !f.isDirectory()) {
+      return builder.setPath(path).build();
+    } else {
+      return builder.setSize(size).setPath(path).setForceCreate(true).build();
+    }
   }
 }
 
