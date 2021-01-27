@@ -3,7 +3,7 @@
 This section describes how to run YCSB on pmemkv
 
 ### Requirements
-Please install [pmemkv-java](https://github.com/pmem/pmemkv-java) and run `mvn package` in the `pmemkv-java` directory. For further instructions and requirements take a look at the [pmemkv-java GitHub repository](https://github.com/pmem/pmemkv-java).
+Please install [pmemkv-java](https://github.com/pmem/pmemkv-java) and run `mvn install` in the `pmemkv-java` directory. For further instructions and requirements take a look at the [pmemkv-java GitHub repository](https://github.com/pmem/pmemkv-java).
 
 ### Build the pmemkv binding
 After any modification of the pmemkv-binding you can rebuild the package with this command `mvn -pl site.ycsb:pmemkv-binding -am clean package`. For the complete installtion follow [the official YCSB documentation](https://github.com/brianfrankcooper/YCSB/wiki/Getting-Started).
