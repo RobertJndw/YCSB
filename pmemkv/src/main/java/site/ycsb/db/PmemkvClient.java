@@ -19,15 +19,18 @@ import java.nio.ByteBuffer;
 public class PmemkvClient extends DB {
 
   private Database<String, Map<String, ByteIterator>> db;
+  private String path, engine;
+  private long size;
+  private boolean reset;
 
   @Override
   public void init() throws DBException {
     Properties props = getProperties();
 
-    String path = props.getProperty("path", "/mnt/pmem/ycsbDatabase");
-    String engine = props.getProperty("engine", "cmap");
-    long size = Long.parseLong(props.getProperty("size", ""+Integer.MAX_VALUE));
-    boolean reset = Boolean.parseBoolean(props.getProperty("reset", "false"));
+    path = props.getProperty("path", "/mnt/pmem/ycsbDatabase");
+    engine = props.getProperty("engine", "cmap");
+    size = Long.parseLong(props.getProperty("size", ""+Integer.MAX_VALUE));
+    reset = Boolean.parseBoolean(props.getProperty("reset", "false"));
 
     try {
       File f = new File(path);
@@ -66,7 +69,18 @@ public class PmemkvClient extends DB {
   @Override
   public Status scan(String table, String startkey, int recordcount, Set<String> fields,
                      Vector<HashMap<String, ByteIterator>> result) {
-    return Status.NOT_IMPLEMENTED;
+    if (!engine.equals("vsmap")) {
+      return Status.NOT_IMPLEMENTED;
+    }
+    startkey = createKey(table, startkey);
+    db.getAbove(startkey, (k, v) -> {
+        // Maybe there is a better option to exit sooner
+        if(result.size() == recordcount) {
+          return;
+        }
+        result.add(new HashMap<>(v));
+      });
+    return Status.OK;
   }
 
   @Override
@@ -133,7 +147,10 @@ class StringConverter implements Converter<String> {
   }
 
   public String fromByteBuffer(ByteBuffer entry) {
-    return new String(entry.array());
+    byte[] bytes;
+    bytes = new byte[entry.capacity()];
+    entry.get(bytes);
+    return new String(bytes);
   }
 }
 
@@ -164,7 +181,10 @@ class MapStringConverter implements Converter<Map<String, ByteIterator>> {
 
   @Override
   public Map<String, ByteIterator> fromByteBuffer(ByteBuffer byteBuffer) {
-    ByteArrayInputStream byteIn = new ByteArrayInputStream(byteBuffer.array());
+    byte[] bytes;
+    bytes = new byte[byteBuffer.capacity()];
+    byteBuffer.get(bytes);
+    ByteArrayInputStream byteIn = new ByteArrayInputStream(bytes);
     ObjectInputStream in = null;
     Map<String, String> map = new HashMap<>();
     try {
