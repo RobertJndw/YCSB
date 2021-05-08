@@ -1,16 +1,10 @@
 package site.ycsb.db;
 
-import io.pmem.pmemkv.DatabaseException;
-import site.ycsb.ByteIterator;
-import site.ycsb.DB;
-import site.ycsb.DBException;
-import site.ycsb.Status;
-import site.ycsb.StringByteIterator;
+import site.ycsb.*;
 
 import java.io.*;
 import java.util.*;
-import io.pmem.pmemkv.Database;
-import io.pmem.pmemkv.Converter;
+import io.pmem.pmemkv.*;
 
 import java.nio.ByteBuffer;
 
@@ -175,14 +169,25 @@ class StringConverter implements Converter<String> {
 }
 
 class MapStringConverter implements Converter<Map<String, ByteIterator>> {
-  // Based on this post https://stackoverflow.com/questions/2836646/java-serializable-object-to-byte-array
+  // Inspiration from https://github.com/KFilipek/YCSB
 
   @Override
-  public ByteBuffer toByteBuffer(Map<String, ByteIterator> stringByteIteratorMap) {
+  public ByteBuffer toByteBuffer(Map<String, ByteIterator> entries) {
     try (final ByteArrayOutputStream byteOut = new ByteArrayOutputStream()) {
-      final ObjectOutputStream out = new ObjectOutputStream(byteOut);
-      out.writeObject(StringByteIterator.getStringMap(stringByteIteratorMap));
-      out.flush();
+      // Used to transfer int to byte[]
+      ByteBuffer intBuf = ByteBuffer.allocate(4);
+      for (final Map.Entry<String, ByteIterator> entry : entries.entrySet()) {
+        byte[] key = entry.getKey().getBytes();
+        byteOut.write(intBuf.putInt(key.length).array());
+        byteOut.write(key);
+        intBuf.clear();
+
+        byte[] value = entry.getValue().toArray();
+        byteOut.write(intBuf.putInt(value.length).array());
+        byteOut.write(value);
+        intBuf.clear();
+      }
+      // Schema is [KeyLength, KeyValue, ValueLength, ValueValue]
       return ByteBuffer.wrap(byteOut.toByteArray());
     } catch (IOException e) {
       e.printStackTrace();
@@ -192,17 +197,20 @@ class MapStringConverter implements Converter<Map<String, ByteIterator>> {
 
   @Override
   public Map<String, ByteIterator> fromByteBuffer(ByteBuffer byteBuffer) {
-    byte[] bytes = new byte[byteBuffer.capacity()];
-    byteBuffer.get(bytes);
+    Map<String, ByteIterator> map = new HashMap<>();
 
-    Map<String, String> map = new HashMap<>();
-    try (final ByteArrayInputStream byteIn = new ByteArrayInputStream(bytes)) {
-      ObjectInputStream in = new ObjectInputStream(byteIn);
-      map = (Map<String, String>) in.readObject();
-    } catch (IOException | ClassNotFoundException e) {
-      e.printStackTrace();
+    // Schema is [KeyLength, KeyValue, ValueLength, ValueValue]
+    while (byteBuffer.remaining() > 0) {
+      byte[] keyString = new byte[byteBuffer.getInt()];
+      byteBuffer.get(keyString);
+
+      byte[] valueString = new byte[byteBuffer.getInt()];
+      byteBuffer.get(valueString);
+
+      map.put(new String(keyString), new ByteArrayByteIterator(valueString));
     }
-    return StringByteIterator.getByteIteratorMap(map);
+
+    return map;
   }
 }
 
