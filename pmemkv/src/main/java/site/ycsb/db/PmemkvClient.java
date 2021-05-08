@@ -1,5 +1,6 @@
 package site.ycsb.db;
 
+import io.pmem.pmemkv.DatabaseException;
 import site.ycsb.ByteIterator;
 import site.ycsb.DB;
 import site.ycsb.DBException;
@@ -18,30 +19,50 @@ import java.nio.ByteBuffer;
  */
 public class PmemkvClient extends DB {
 
+  private static final String PROPERTY_PATH = "pmemkv.path";
+  private static final String PROPERTY_ENGINE = "pmemkv.engine";
+  private static final String PROPERTY_SIZE = "pmemkv.size";
+
+
   private Database<String, Map<String, ByteIterator>> db;
   private String path, engine;
   private long size;
-  private boolean reset;
+  private static int threads = 0;
+
 
   @Override
   public void init() throws DBException {
-    Properties props = getProperties();
-
-    path = props.getProperty("path", "/mnt/pmem/ycsbDatabase");
-    engine = props.getProperty("engine", "cmap");
-    size = Long.parseLong(props.getProperty("size", ""+Integer.MAX_VALUE));
-    reset = Boolean.parseBoolean(props.getProperty("reset", "false"));
-
-    try {
-      File f = new File(path);
-      if (f.exists() && !f.isDirectory() && reset) {
-        f.delete();
+    synchronized (PmemkvClient.class) {
+      final Properties props = getProperties();
+      engine = props.getProperty(PROPERTY_ENGINE, "cmap");
+      path = props.getProperty(PROPERTY_PATH);
+      if (path == null) {
+        throw new DBException(PROPERTY_PATH + " is mandatory to run");
       }
-      db = getDatabase(path, size, engine);
-    } catch (Exception e) {
-      System.err.println("Error: Creating the database failed");
-      e.printStackTrace();
-      throw new DBException(e);
+      size = Long.parseLong(props.getProperty(PROPERTY_SIZE));
+      if (path == null) {
+        throw new DBException(PROPERTY_PATH + " is mandatory to run");
+      }
+
+      // Create database here
+      Database.Builder<String, Map<String, ByteIterator>> builder = new Database.Builder(engine)
+          .setPath(path)
+          .setKeyConverter(new StringConverter())
+          .setValueConverter(new MapStringConverter());
+      try {
+        File f = new File(path);
+        if (f.exists() && !f.isDirectory()) {
+          db = builder.build();
+        } else {
+          db = builder
+              .setSize(size)
+              .setForceCreate(true)
+              .build();
+        }
+      } catch (DatabaseException e) {
+        throw new DBException(String.format("Error: Creating the database failed: %s %s", engine, path));
+      }
+      threads++;
     }
   }
 
@@ -54,6 +75,7 @@ public class PmemkvClient extends DB {
     if(output == null) {
       return Status.NOT_FOUND;
     }
+    // If no field where requested return all fields
     if(fields == null || fields.size() == 0) {
       result.putAll(output);
     } else {
@@ -91,7 +113,11 @@ public class PmemkvClient extends DB {
       return Status.NOT_FOUND;
     }
     output.putAll(values);
-    db.put(key, output);
+    try {
+      db.put(key, output);
+    } catch (DatabaseException e) {
+      return Status.ERROR;
+    }
     return Status.OK;
   }
 
@@ -101,7 +127,7 @@ public class PmemkvClient extends DB {
       key = createKey(table, key);
       db.put(key, values);
     } catch (Exception e) {
-      e.printStackTrace();
+      return Status.ERROR;
     }
     return Status.OK;
   }
@@ -109,35 +135,30 @@ public class PmemkvClient extends DB {
   @Override
   public Status delete(String table, String key) {
     key = createKey(table, key);
-    if(db.remove(key)) {
-      return Status.OK;
-    } else {
-      return Status.NOT_FOUND;
+    try {
+      if(db.remove(key)) {
+        return Status.OK;
+      } else {
+        return Status.NOT_FOUND;
+      }
+    } catch (DatabaseException e) {
+      return Status.ERROR;
     }
   }
 
   @Override
-  public void cleanup() throws DBException {
-    db.stop();
+  public void cleanup() {
+    synchronized (PmemkvClient.class) {
+      threads--;
+      if(db != null && threads == 0) {
+        db.stop();
+        db = null;
+      }
+    }
   }
 
   private String createKey(String table, String key) {
     return table+"/"+key;
-  }
-
-  private static Database<String, Map<String, ByteIterator>> getDatabase(String path, long size, 
-          String engine) {
-
-    Database.Builder<String, Map<String, ByteIterator>> builder = new Database.Builder(engine)
-            .setKeyConverter(new StringConverter())
-            .setValueConverter(new MapStringConverter());
-
-    File f = new File(path);
-    if (f.exists() && !f.isDirectory()) {
-      return builder.setPath(path).build();
-    } else {
-      return builder.setSize(size).setPath(path).setForceCreate(true).build();
-    }
   }
 }
 
@@ -147,62 +168,40 @@ class StringConverter implements Converter<String> {
   }
 
   public String fromByteBuffer(ByteBuffer entry) {
-    byte[] bytes;
-    bytes = new byte[entry.capacity()];
+    byte[] bytes = new byte[entry.capacity()];
     entry.get(bytes);
     return new String(bytes);
   }
 }
 
 class MapStringConverter implements Converter<Map<String, ByteIterator>> {
-  // Based of this post https://stackoverflow.com/questions/2836646/java-serializable-object-to-byte-array
+  // Based on this post https://stackoverflow.com/questions/2836646/java-serializable-object-to-byte-array
 
   @Override
   public ByteBuffer toByteBuffer(Map<String, ByteIterator> stringByteIteratorMap) {
-    ByteArrayOutputStream byteOut = new ByteArrayOutputStream();
-    ObjectOutputStream out;
-    try {
-      out = new ObjectOutputStream(byteOut);
-      // Conversion necessary because ByteIterator is not serializable
+    try (final ByteArrayOutputStream byteOut = new ByteArrayOutputStream()) {
+      final ObjectOutputStream out = new ObjectOutputStream(byteOut);
       out.writeObject(StringByteIterator.getStringMap(stringByteIteratorMap));
       out.flush();
+      return ByteBuffer.wrap(byteOut.toByteArray());
     } catch (IOException e) {
       e.printStackTrace();
-    } finally {
-      // Make sure the stream is closed at the end
-      try {
-        byteOut.close();
-      } catch (IOException ignored) {
-        ignored.printStackTrace();
-      }
     }
-    return ByteBuffer.wrap(byteOut.toByteArray());
+    return null;
   }
 
   @Override
   public Map<String, ByteIterator> fromByteBuffer(ByteBuffer byteBuffer) {
-    byte[] bytes;
-    bytes = new byte[byteBuffer.capacity()];
+    byte[] bytes = new byte[byteBuffer.capacity()];
     byteBuffer.get(bytes);
-    ByteArrayInputStream byteIn = new ByteArrayInputStream(bytes);
-    ObjectInputStream in = null;
+
     Map<String, String> map = new HashMap<>();
-    try {
-      in = new ObjectInputStream(byteIn);
+    try (final ByteArrayInputStream byteIn = new ByteArrayInputStream(bytes)) {
+      ObjectInputStream in = new ObjectInputStream(byteIn);
       map = (Map<String, String>) in.readObject();
     } catch (IOException | ClassNotFoundException e) {
       e.printStackTrace();
-    } finally {
-      try {
-        // Make sure the input stream is closed
-        if (in != null) {
-          in.close();
-        }
-      } catch (IOException ignored) {
-        ignored.printStackTrace();
-      }
     }
-    // Revert conversion from serialization
     return StringByteIterator.getByteIteratorMap(map);
   }
 }
